@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // ── Gallon Trend ──────────────────────────────────────────────────────────────
-// Source: transaction_daily.gallons_pumped (Taiga DB)
+// Primary source: fuel_sales_daily (our own DB, populated from Taiga email ingestion)
+// Fallback source: transaction_summary (Taiga DB, monthly totals, current year only)
 
 export interface PeriodComparison {
   current: number | null;
@@ -35,20 +36,25 @@ function periodBounds(asOf: Date) {
   };
 }
 
+// Sums gallons from fuel_sales_daily (our own DB, populated from email ingestion).
+// col is either "gallons" (current year) or "comparison_gallons" (prior year LY value
+// that Taiga embeds in each daily report row).
 async function sumGallons(
   supabase: SupabaseClient,
   from: string,
-  to: string
+  to: string,
+  col: "gallons" | "comparison_gallons" = "gallons"
 ): Promise<number | null> {
   const { data, error } = await supabase
-    .from("transaction_daily")
-    .select("gallons_pumped")
-    .gte("business_date", from)
-    .lte("business_date", to);
+    .from("fuel_sales_daily")
+    .select(col)
+    .eq("fuel_type", "TOTAL")
+    .gte("report_date", from)
+    .lte("report_date", to);
 
   if (error || !data || data.length === 0) return null;
-  const total = (data as { gallons_pumped: number | null }[]).reduce(
-    (sum, r) => sum + (r.gallons_pumped ?? 0),
+  const total = (data as Record<string, number | null>[]).reduce(
+    (sum, r) => sum + (r[col] ?? 0),
     0
   );
   return total > 0 ? total : null;
@@ -72,13 +78,16 @@ export async function getGallonTrend(
   const b = periodBounds(asOf);
   const today = asOf.toISOString().slice(0, 10);
 
+  // Prior-year gallons come from the comparison_gallons column that Taiga embeds
+  // in each daily email report (same-day LY value). Summing them over the current
+  // period's date range gives the equivalent LY total for the same days.
   const [mtdCur, qtdCur, ytdCur, mtdPy, qtdPy, ytdPy] = await Promise.all([
-    sumGallons(supabase, b.mtdStart, today),
-    sumGallons(supabase, b.qtdStart, today),
-    sumGallons(supabase, b.ytdStart, today),
-    sumGallons(supabase, b.pyMtdStart, b.pyAsOf),
-    sumGallons(supabase, b.pyQtdStart, b.pyAsOf),
-    sumGallons(supabase, b.pyYtdStart, b.pyAsOf),
+    sumGallons(supabase, b.mtdStart, today, "gallons"),
+    sumGallons(supabase, b.qtdStart, today, "gallons"),
+    sumGallons(supabase, b.ytdStart, today, "gallons"),
+    sumGallons(supabase, b.mtdStart, today, "comparison_gallons"),
+    sumGallons(supabase, b.qtdStart, today, "comparison_gallons"),
+    sumGallons(supabase, b.ytdStart, today, "comparison_gallons"),
   ]);
 
   return {
@@ -87,6 +96,98 @@ export async function getGallonTrend(
     qtd: comparison(qtdCur, qtdPy),
     ytd: comparison(ytdCur, ytdPy),
   };
+}
+
+// ── Gallon Trend fallback (Taiga transaction_summary) ────────────────────────
+// Used when our own DB is unavailable. Monthly rows from Taiga give the correct
+// running MTD for the current month but cannot provide the LY same-day comparison,
+// so priorYear is always null here.
+
+async function sumGallonsSummary(
+  taiga: SupabaseClient,
+  monthKeys: string[] // ['2026-01', '2026-02', ...]
+): Promise<number | null> {
+  if (monthKeys.length === 0) return null;
+  const { data, error } = await taiga
+    .from("transaction_summary")
+    .select("gallons_pumped")
+    .in("date_range", monthKeys);
+  if (error || !data || data.length === 0) return null;
+  const total = (data as { gallons_pumped: number | null }[]).reduce(
+    (sum, r) => sum + (r.gallons_pumped ?? 0),
+    0
+  );
+  return total > 0 ? total : null;
+}
+
+function monthKeysBetween(from: string, to: string): string[] {
+  const keys: string[] = [];
+  const [fy, fm] = from.slice(0, 7).split("-").map(Number);
+  const [ty, tm] = to.slice(0, 7).split("-").map(Number);
+  let y = fy, m = fm;
+  while (y < ty || (y === ty && m <= tm)) {
+    keys.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return keys;
+}
+
+export async function getGallonTrendFallback(
+  taiga: SupabaseClient,
+  asOf: Date = new Date()
+): Promise<GallonTrend> {
+  const b = periodBounds(asOf);
+  const today = asOf.toISOString().slice(0, 10);
+  const [mtd, qtd, ytd] = await Promise.all([
+    sumGallonsSummary(taiga, monthKeysBetween(b.mtdStart, today)),
+    sumGallonsSummary(taiga, monthKeysBetween(b.qtdStart, today)),
+    sumGallonsSummary(taiga, monthKeysBetween(b.ytdStart, today)),
+  ]);
+  return {
+    asOf: today,
+    mtd: comparison(mtd, null),
+    qtd: comparison(qtd, null),
+    ytd: comparison(ytd, null),
+  };
+}
+
+export async function getStoreGallonsMtdFallback(
+  taiga: SupabaseClient,
+  asOf: Date = new Date()
+): Promise<StoreGallons[]> {
+  const y = asOf.getUTCFullYear();
+  const m = String(asOf.getUTCMonth() + 1).padStart(2, "0");
+  const monthKey = `${y}-${m}`;
+  const { data } = await taiga
+    .from("transaction_summary")
+    .select("store_id, gallons_pumped")
+    .eq("date_range", monthKey);
+
+  return ((data ?? []) as { store_id: string; gallons_pumped: number | null }[])
+    .filter((r) => r.gallons_pumped)
+    .map((r) => ({
+      storeId: r.store_id,
+      storeName: slugToTitle(r.store_id),
+      gallons: r.gallons_pumped!,
+    }))
+    .sort((a, b) => b.gallons - a.gallons);
+}
+
+export async function getLastReportDateFallback(
+  taiga: SupabaseClient
+): Promise<string | null> {
+  const { data } = await taiga
+    .from("transaction_summary")
+    .select("date_range")
+    .order("date_range", { ascending: false })
+    .limit(1)
+    .single();
+  if (!data) return null;
+  // Return the last day of the most recent month as a proxy
+  const [y, m] = (data as { date_range: string }).date_range.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getDate();
+  return `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 }
 
 // ── Store Gallons MTD ─────────────────────────────────────────────────────────
@@ -106,34 +207,30 @@ export async function getStoreGallonsMtd(
   const mtdStart = `${y}-${m}-01`;
   const today = asOf.toISOString().slice(0, 10);
 
-  const [{ data: dailyData }, { data: storesData }] = await Promise.all([
-    supabase
-      .from("transaction_daily")
-      .select("store_id, gallons_pumped")
-      .gte("business_date", mtdStart)
-      .lte("business_date", today),
-    supabase.from("stores").select("store_id, store_name"),
-  ]);
+  const { data: dailyData } = await supabase
+    .from("fuel_sales_daily")
+    .select("store_id, store_name, gallons")
+    .eq("fuel_type", "TOTAL")
+    .gte("report_date", mtdStart)
+    .lte("report_date", today);
 
-  const nameMap = new Map(
-    (storesData ?? []).map((s: { store_id: string; store_name: string }) => [
-      s.store_id,
-      s.store_name,
-    ])
-  );
-
-  const byStore = new Map<string, number>();
+  const byStore = new Map<string, { gallons: number; storeName: string }>();
   for (const row of (dailyData ?? []) as {
     store_id: string;
-    gallons_pumped: number | null;
+    store_name: string;
+    gallons: number | null;
   }[]) {
-    byStore.set(row.store_id, (byStore.get(row.store_id) ?? 0) + (row.gallons_pumped ?? 0));
+    const existing = byStore.get(row.store_id) ?? { gallons: 0, storeName: row.store_name };
+    byStore.set(row.store_id, {
+      gallons: existing.gallons + (row.gallons ?? 0),
+      storeName: row.store_name,
+    });
   }
 
   return [...byStore.entries()]
-    .map(([storeId, gallons]) => ({
+    .map(([storeId, { gallons, storeName }]) => ({
       storeId,
-      storeName: nameMap.get(storeId) ?? slugToTitle(storeId),
+      storeName,
       gallons,
     }))
     .sort((a, b) => b.gallons - a.gallons);
@@ -332,14 +429,14 @@ export async function getLastReportDate(
   supabase: SupabaseClient
 ): Promise<string | null> {
   const { data, error } = await supabase
-    .from("transaction_daily")
-    .select("business_date")
-    .order("business_date", { ascending: false })
+    .from("fuel_sales_daily")
+    .select("report_date")
+    .order("report_date", { ascending: false })
     .limit(1)
     .single();
 
   if (error || !data) return null;
-  return (data as { business_date: string }).business_date;
+  return (data as { report_date: string }).report_date;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
