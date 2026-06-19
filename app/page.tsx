@@ -204,13 +204,14 @@ export default async function Page() {
 
   try {
     const taiga = getTaigaSupabaseClient();
-    [gallonTrend, storeGallons, marginData, topBottomData, lastReportDate] =
+    lastReportDate = await getLastReportDate(taiga);
+    const asOf = lastReportDate ? new Date(lastReportDate + "T12:00:00Z") : new Date();
+    [gallonTrend, storeGallons, marginData, topBottomData] =
       await Promise.all([
-        getGallonTrend(taiga),
-        getStoreGallonsMtd(taiga),
+        getGallonTrend(taiga, asOf),
+        getStoreGallonsMtd(taiga, asOf),
         getMarginStatus(taiga),
         getTopBottomProducts(taiga),
-        getLastReportDate(taiga),
       ]);
     [voidsData, combosData] = await Promise.all([getVoids(), getCombos()]);
   } catch {
