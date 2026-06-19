@@ -1,8 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// ── Gallon Trend ──────────────────────────────────────────────────────────────
-// Primary source: fuel_sales_daily (our own DB, populated from Taiga email ingestion)
-// Fallback source: transaction_summary (Taiga DB, monthly totals, current year only)
+// All data comes from the Taiga Supabase (one database).
+//
+// Current-year gallons   → transaction_daily  (daily per-store rows, reliable from April 2026)
+// Prior-year gallons     → transaction_summary (monthly per-store rows, reliable from June 2024)
+//
+// LY MTD comparison: the partial current month in the prior year is unavailable at
+// daily granularity, so we scale the full prior-year month by (day / days_in_month).
+// Complete prior-year months (QTD/YTD) are summed exactly.
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface PeriodComparison {
   current: number | null;
@@ -17,53 +24,39 @@ export interface GallonTrend {
   ytd: PeriodComparison;
 }
 
-function periodBounds(asOf: Date) {
-  const y = asOf.getUTCFullYear();
-  const m = asOf.getUTCMonth() + 1;
-  const quarter = Math.ceil(m / 3);
-  const qtdMonth = (quarter - 1) * 3 + 1;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const iso = (yr: number, mo: number, d: number) =>
-    `${yr}-${pad(mo)}-${pad(d)}`;
-  return {
-    mtdStart:   iso(y, m, 1),
-    qtdStart:   iso(y, qtdMonth, 1),
-    ytdStart:   iso(y, 1, 1),
-    pyMtdStart: iso(y - 1, m, 1),
-    pyQtdStart: iso(y - 1, qtdMonth, 1),
-    pyYtdStart: iso(y - 1, 1, 1),
-    pyAsOf:     iso(y - 1, m, asOf.getUTCDate()),
-  };
+export interface StoreGallons {
+  storeId: string;
+  storeName: string;
+  gallons: number;
 }
 
-// Sums gallons from fuel_sales_daily (our own DB, populated from email ingestion).
-// col is either "gallons" (current year) or "comparison_gallons" (prior year LY value
-// that Taiga embeds in each daily report row).
-async function sumGallons(
-  supabase: SupabaseClient,
-  from: string,
-  to: string,
-  col: "gallons" | "comparison_gallons" = "gallons"
-): Promise<number | null> {
-  const { data, error } = await supabase
-    .from("fuel_sales_daily")
-    .select(col)
-    .eq("fuel_type", "TOTAL")
-    .gte("report_date", from)
-    .lte("report_date", to);
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-  if (error || !data || data.length === 0) return null;
-  const total = (data as Record<string, number | null>[]).reduce(
-    (sum, r) => sum + (r[col] ?? 0),
-    0
-  );
-  return total > 0 ? total : null;
+function slugToTitle(slug: string): string {
+  return slug
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
-function comparison(
-  current: number | null,
-  prior: number | null
-): PeriodComparison {
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getDate();
+}
+
+function monthKeysBetween(fromDate: string, toDate: string): string[] {
+  const keys: string[] = [];
+  const [fy, fm] = fromDate.slice(0, 7).split("-").map(Number);
+  const [ty, tm] = toDate.slice(0, 7).split("-").map(Number);
+  let y = fy, m = fm;
+  while (y < ty || (y === ty && m <= tm)) {
+    keys.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return keys;
+}
+
+function comparison(current: number | null, prior: number | null): PeriodComparison {
   const changePercent =
     current !== null && prior !== null && prior !== 0
       ? ((current - prior) / prior) * 100
@@ -71,23 +64,92 @@ function comparison(
   return { current, priorYear: prior, changePercent };
 }
 
+// Sum gallons_pumped from transaction_summary for the given month keys.
+// The partial month (current month in LY) is scaled by dayFraction.
+async function sumSummaryGallons(
+  supabase: SupabaseClient,
+  monthKeys: string[],
+  partialMonthKey: string | null,   // the month to scale
+  dayFraction: number               // day / daysInMonth
+): Promise<number | null> {
+  if (monthKeys.length === 0) return null;
+
+  const { data, error } = await supabase
+    .from("transaction_summary")
+    .select("date_range, gallons_pumped")
+    .in("date_range", monthKeys);
+
+  if (error || !data || data.length === 0) return null;
+
+  const rows = data as { date_range: string; gallons_pumped: number | null }[];
+  const total = rows.reduce((sum, r) => {
+    const g = r.gallons_pumped ?? 0;
+    return sum + (r.date_range === partialMonthKey ? g * dayFraction : g);
+  }, 0);
+
+  return total > 0 ? total : null;
+}
+
+// Sum gallons_pumped from transaction_daily for a date range.
+async function sumDailyGallons(
+  supabase: SupabaseClient,
+  from: string,
+  to: string
+): Promise<number | null> {
+  const { data, error } = await supabase
+    .from("transaction_daily")
+    .select("gallons_pumped")
+    .gte("business_date", from)
+    .lte("business_date", to);
+
+  if (error || !data || data.length === 0) return null;
+  const total = (data as { gallons_pumped: number | null }[]).reduce(
+    (sum, r) => sum + (r.gallons_pumped ?? 0),
+    0
+  );
+  return total > 0 ? total : null;
+}
+
+// ── Gallon Trend ──────────────────────────────────────────────────────────────
+
 export async function getGallonTrend(
   supabase: SupabaseClient,
   asOf: Date = new Date()
 ): Promise<GallonTrend> {
-  const b = periodBounds(asOf);
+  const y = asOf.getUTCFullYear();
+  const m = asOf.getUTCMonth() + 1;
+  const d = asOf.getUTCDate();
   const today = asOf.toISOString().slice(0, 10);
 
-  // Prior-year gallons come from the comparison_gallons column that Taiga embeds
-  // in each daily email report (same-day LY value). Summing them over the current
-  // period's date range gives the equivalent LY total for the same days.
-  const [mtdCur, qtdCur, ytdCur, mtdPy, qtdPy, ytdPy] = await Promise.all([
-    sumGallons(supabase, b.mtdStart, today, "gallons"),
-    sumGallons(supabase, b.qtdStart, today, "gallons"),
-    sumGallons(supabase, b.ytdStart, today, "gallons"),
-    sumGallons(supabase, b.mtdStart, today, "comparison_gallons"),
-    sumGallons(supabase, b.qtdStart, today, "comparison_gallons"),
-    sumGallons(supabase, b.ytdStart, today, "comparison_gallons"),
+  const quarter = Math.ceil(m / 3);
+  const qtdStartMonth = (quarter - 1) * 3 + 1;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const mtdStart  = `${y}-${pad(m)}-01`;
+  const qtdStart  = `${y}-${pad(qtdStartMonth)}-01`;
+  const ytdStart  = `${y}-01-01`;
+
+  // Current year: transaction_daily has reliable daily data
+  const [mtdCur, qtdCur, ytdCur] = await Promise.all([
+    sumDailyGallons(supabase, mtdStart, today),
+    sumDailyGallons(supabase, qtdStart, today),
+    sumDailyGallons(supabase, ytdStart, today),
+  ]);
+
+  // Prior year: transaction_summary (monthly). The current month in LY is partial —
+  // scale it by (day / daysInMonth) since we only have the full-month total.
+  const lyYear = y - 1;
+  const lyPartialKey = `${lyYear}-${pad(m)}`;
+  const dayFraction = d / daysInMonth(lyYear, m);
+
+  const lyMtdKeys  = [`${lyYear}-${pad(m)}`];
+  const lyQtdKeys  = monthKeysBetween(`${lyYear}-${pad(qtdStartMonth)}-01`, `${lyYear}-${pad(m)}-01`);
+  const lyYtdKeys  = monthKeysBetween(`${lyYear}-01-01`, `${lyYear}-${pad(m)}-01`);
+
+  const [mtdPy, qtdPy, ytdPy] = await Promise.all([
+    sumSummaryGallons(supabase, lyMtdKeys, lyPartialKey, dayFraction),
+    sumSummaryGallons(supabase, lyQtdKeys, lyPartialKey, dayFraction),
+    sumSummaryGallons(supabase, lyYtdKeys, lyPartialKey, dayFraction),
   ]);
 
   return {
@@ -98,105 +160,7 @@ export async function getGallonTrend(
   };
 }
 
-// ── Gallon Trend fallback (Taiga transaction_summary) ────────────────────────
-// Used when our own DB is unavailable. Monthly rows from Taiga give the correct
-// running MTD for the current month but cannot provide the LY same-day comparison,
-// so priorYear is always null here.
-
-async function sumGallonsSummary(
-  taiga: SupabaseClient,
-  monthKeys: string[] // ['2026-01', '2026-02', ...]
-): Promise<number | null> {
-  if (monthKeys.length === 0) return null;
-  const { data, error } = await taiga
-    .from("transaction_summary")
-    .select("gallons_pumped")
-    .in("date_range", monthKeys);
-  if (error || !data || data.length === 0) return null;
-  const total = (data as { gallons_pumped: number | null }[]).reduce(
-    (sum, r) => sum + (r.gallons_pumped ?? 0),
-    0
-  );
-  return total > 0 ? total : null;
-}
-
-function monthKeysBetween(from: string, to: string): string[] {
-  const keys: string[] = [];
-  const [fy, fm] = from.slice(0, 7).split("-").map(Number);
-  const [ty, tm] = to.slice(0, 7).split("-").map(Number);
-  let y = fy, m = fm;
-  while (y < ty || (y === ty && m <= tm)) {
-    keys.push(`${y}-${String(m).padStart(2, "0")}`);
-    m++;
-    if (m > 12) { m = 1; y++; }
-  }
-  return keys;
-}
-
-export async function getGallonTrendFallback(
-  taiga: SupabaseClient,
-  asOf: Date = new Date()
-): Promise<GallonTrend> {
-  const b = periodBounds(asOf);
-  const today = asOf.toISOString().slice(0, 10);
-  const [mtd, qtd, ytd] = await Promise.all([
-    sumGallonsSummary(taiga, monthKeysBetween(b.mtdStart, today)),
-    sumGallonsSummary(taiga, monthKeysBetween(b.qtdStart, today)),
-    sumGallonsSummary(taiga, monthKeysBetween(b.ytdStart, today)),
-  ]);
-  return {
-    asOf: today,
-    mtd: comparison(mtd, null),
-    qtd: comparison(qtd, null),
-    ytd: comparison(ytd, null),
-  };
-}
-
-export async function getStoreGallonsMtdFallback(
-  taiga: SupabaseClient,
-  asOf: Date = new Date()
-): Promise<StoreGallons[]> {
-  const y = asOf.getUTCFullYear();
-  const m = String(asOf.getUTCMonth() + 1).padStart(2, "0");
-  const monthKey = `${y}-${m}`;
-  const { data } = await taiga
-    .from("transaction_summary")
-    .select("store_id, gallons_pumped")
-    .eq("date_range", monthKey);
-
-  return ((data ?? []) as { store_id: string; gallons_pumped: number | null }[])
-    .filter((r) => r.gallons_pumped)
-    .map((r) => ({
-      storeId: r.store_id,
-      storeName: slugToTitle(r.store_id),
-      gallons: r.gallons_pumped!,
-    }))
-    .sort((a, b) => b.gallons - a.gallons);
-}
-
-export async function getLastReportDateFallback(
-  taiga: SupabaseClient
-): Promise<string | null> {
-  const { data } = await taiga
-    .from("transaction_summary")
-    .select("date_range")
-    .order("date_range", { ascending: false })
-    .limit(1)
-    .single();
-  if (!data) return null;
-  // Return the last day of the most recent month as a proxy
-  const [y, m] = (data as { date_range: string }).date_range.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(y, m, 0)).getDate();
-  return `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-}
-
 // ── Store Gallons MTD ─────────────────────────────────────────────────────────
-
-export interface StoreGallons {
-  storeId: string;
-  storeName: string;
-  gallons: number;
-}
 
 export async function getStoreGallonsMtd(
   supabase: SupabaseClient,
@@ -207,38 +171,46 @@ export async function getStoreGallonsMtd(
   const mtdStart = `${y}-${m}-01`;
   const today = asOf.toISOString().slice(0, 10);
 
-  const { data: dailyData } = await supabase
-    .from("fuel_sales_daily")
-    .select("store_id, store_name, gallons")
-    .eq("fuel_type", "TOTAL")
-    .gte("report_date", mtdStart)
-    .lte("report_date", today);
+  const { data } = await supabase
+    .from("transaction_daily")
+    .select("store_id, gallons_pumped")
+    .gte("business_date", mtdStart)
+    .lte("business_date", today);
 
-  const byStore = new Map<string, { gallons: number; storeName: string }>();
-  for (const row of (dailyData ?? []) as {
-    store_id: string;
-    store_name: string;
-    gallons: number | null;
-  }[]) {
-    const existing = byStore.get(row.store_id) ?? { gallons: 0, storeName: row.store_name };
-    byStore.set(row.store_id, {
-      gallons: existing.gallons + (row.gallons ?? 0),
-      storeName: row.store_name,
-    });
+  const byStore = new Map<string, number>();
+  for (const row of (data ?? []) as { store_id: string; gallons_pumped: number | null }[]) {
+    byStore.set(row.store_id, (byStore.get(row.store_id) ?? 0) + (row.gallons_pumped ?? 0));
   }
 
   return [...byStore.entries()]
-    .map(([storeId, { gallons, storeName }]) => ({
+    .map(([storeId, gallons]) => ({
       storeId,
-      storeName,
+      storeName: slugToTitle(storeId),
       gallons,
     }))
     .sort((a, b) => b.gallons - a.gallons);
 }
 
+// ── Last Report Date ──────────────────────────────────────────────────────────
+
+export async function getLastReportDate(
+  supabase: SupabaseClient
+): Promise<string | null> {
+  // Use transaction_daily — it has daily granularity and reliable data from April 2026.
+  // Filter to rows with meaningful gallons to exclude old bad data.
+  const { data, error } = await supabase
+    .from("transaction_daily")
+    .select("business_date")
+    .gt("gallons_pumped", 100)
+    .order("business_date", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error || !data) return null;
+  return (data as { business_date: string }).business_date;
+}
+
 // ── Margin RAG ────────────────────────────────────────────────────────────────
-// Source: transaction_summary.total_margin (Taiga DB)
-// total_margin is a decimal: 0.40 = 40%
 
 export type RagStatus = "green" | "yellow" | "red";
 
@@ -254,7 +226,7 @@ export type MarginData =
   | { available: false; reason: string };
 
 const MARGIN_TARGET = 0.40;
-const MARGIN_YELLOW_FLOOR = 0.38; // within 2 percentage points
+const MARGIN_YELLOW_FLOOR = 0.38;
 
 function ragStatus(margin: number): RagStatus {
   if (margin >= MARGIN_TARGET) return "green";
@@ -265,7 +237,6 @@ function ragStatus(margin: number): RagStatus {
 export async function getMarginStatus(
   supabase: SupabaseClient
 ): Promise<MarginData> {
-  // Find the most recent month
   const { data: latestRow, error: latestErr } = await supabase
     .from("transaction_summary")
     .select("date_range")
@@ -274,28 +245,18 @@ export async function getMarginStatus(
     .single();
 
   if (latestErr || !latestRow) {
-    return { available: false, reason: "No margin data in Taiga yet." };
+    return { available: false, reason: "No margin data available." };
   }
 
-  const [{ data: margins }, { data: storesData }] = await Promise.all([
-    supabase
-      .from("transaction_summary")
-      .select("store_id, store_number, total_margin")
-      .eq("date_range", latestRow.date_range)
-      .order("total_margin", { ascending: false }),
-    supabase.from("stores").select("store_id, store_name"),
-  ]);
+  const { data: margins } = await supabase
+    .from("transaction_summary")
+    .select("store_id, total_margin")
+    .eq("date_range", latestRow.date_range)
+    .order("total_margin", { ascending: false });
 
   if (!margins || margins.length === 0) {
     return { available: false, reason: "No margin data for the latest period." };
   }
-
-  const nameMap = new Map(
-    (storesData ?? []).map((s: { store_id: string; store_name: string }) => [
-      s.store_id,
-      s.store_name,
-    ])
-  );
 
   const stores: StoreMargin[] = (
     margins as { store_id: string; total_margin: number | null }[]
@@ -303,8 +264,8 @@ export async function getMarginStatus(
     .filter((r) => r.total_margin !== null)
     .map((r) => ({
       storeId: r.store_id,
-      storeName: nameMap.get(r.store_id) ?? slugToTitle(r.store_id),
-      marginPercent: Math.round((r.total_margin! * 100) * 10) / 10,
+      storeName: slugToTitle(r.store_id),
+      marginPercent: Math.round(r.total_margin! * 100 * 10) / 10,
       status: ragStatus(r.total_margin!),
     }));
 
@@ -317,7 +278,6 @@ export async function getMarginStatus(
 }
 
 // ── Top / Bottom Products ─────────────────────────────────────────────────────
-// Source: merchandise_product (Taiga DB), aggregated across all stores
 
 export interface ProductRanking {
   rank: number;
@@ -341,7 +301,7 @@ export async function getTopBottomProducts(
     .single();
 
   if (error || !latestRow) {
-    return { available: false, reason: "No product data in Taiga yet." };
+    return { available: false, reason: "No product data available." };
   }
 
   const { data: rows } = await supabase
@@ -353,13 +313,8 @@ export async function getTopBottomProducts(
     return { available: false, reason: "No product data for the latest period." };
   }
 
-  // Aggregate by product_name across stores
   const agg = new Map<string, { units: number; sales: number }>();
-  for (const r of rows as {
-    product_name: string;
-    units_sold: number | null;
-    total_sales_amount: number | null;
-  }[]) {
+  for (const r of rows as { product_name: string; units_sold: number | null; total_sales_amount: number | null }[]) {
     const existing = agg.get(r.product_name) ?? { units: 0, sales: 0 };
     agg.set(r.product_name, {
       units: existing.units + (r.units_sold ?? 0),
@@ -372,10 +327,7 @@ export async function getTopBottomProducts(
     .filter((p) => p.units > 0)
     .sort((a, b) => b.units - a.units);
 
-  const toRanking = (
-    items: typeof sorted,
-    offset = 0
-  ): ProductRanking[] =>
+  const toRanking = (items: typeof sorted, offset = 0): ProductRanking[] =>
     items.map((p, i) => ({
       rank: offset + i + 1,
       productName: p.name,
@@ -383,7 +335,6 @@ export async function getTopBottomProducts(
       totalSales: Math.round(p.sales * 100) / 100,
     }));
 
-  // Bottom 5: lowest-selling among items with at least 10 units (avoids single-sale noise)
   const meaningful = sorted.filter((p) => p.units >= 10);
   const bottom5Raw = meaningful.slice(-5).reverse();
 
@@ -396,54 +347,21 @@ export async function getTopBottomProducts(
 }
 
 // ── Voids ─────────────────────────────────────────────────────────────────────
-// Not available in current Taiga schema
 
 export type VoidsResult =
   | { available: true; rows: unknown[] }
   | { available: false; reason: string };
 
 export async function getVoids(): Promise<VoidsResult> {
-  return {
-    available: false,
-    reason: "Void/no-sale data is not yet in the Taiga dataset.",
-  };
+  return { available: false, reason: "Void/no-sale data is not yet in the dataset." };
 }
 
 // ── Combos ────────────────────────────────────────────────────────────────────
-// Not available in current Taiga schema
 
 export type CombosResult =
   | { available: true; combos: unknown[] }
   | { available: false; reason: string };
 
 export async function getCombos(): Promise<CombosResult> {
-  return {
-    available: false,
-    reason: "Basket-level pairing data is not yet in the Taiga dataset.",
-  };
-}
-
-// ── Last Report Date ──────────────────────────────────────────────────────────
-
-export async function getLastReportDate(
-  supabase: SupabaseClient
-): Promise<string | null> {
-  const { data, error } = await supabase
-    .from("fuel_sales_daily")
-    .select("report_date")
-    .order("report_date", { ascending: false })
-    .limit(1)
-    .single();
-
-  if (error || !data) return null;
-  return (data as { report_date: string }).report_date;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function slugToTitle(slug: string): string {
-  return slug
-    .split("_")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return { available: false, reason: "Basket-level pairing data is not yet in the dataset." };
 }

@@ -1,16 +1,12 @@
 import { getTaigaSupabaseClient } from "@/lib/taiga-supabase";
-import { getSupabaseServerClient } from "@/lib/supabase";
 import {
   getGallonTrend,
-  getGallonTrendFallback,
   getStoreGallonsMtd,
-  getStoreGallonsMtdFallback,
   getMarginStatus,
   getTopBottomProducts,
   getVoids,
   getCombos,
   getLastReportDate,
-  getLastReportDateFallback,
   type GallonTrend,
   type PeriodComparison,
   type StoreGallons,
@@ -207,39 +203,18 @@ export default async function Page() {
   let lastReportDate: string | null = null;
 
   try {
-    const taiga = getTaigaSupabaseClient(); // Taiga DB — margin/product data + fallback gallons
-
-    // Try our own DB first (has fuel_sales_daily with daily gallons + LY comparison).
-    // Falls back to Taiga's transaction_summary if the key isn't configured —
-    // that gives correct current-year MTD but no LY comparison.
-    let ownDbAvailable = false;
-    try {
-      const db = getSupabaseServerClient();
-      lastReportDate = await getLastReportDate(db);
-      const asOf = lastReportDate ? new Date(lastReportDate + "T12:00:00Z") : new Date();
-      [gallonTrend, storeGallons] = await Promise.all([
-        getGallonTrend(db, asOf),
-        getStoreGallonsMtd(db, asOf),
-      ]);
-      ownDbAvailable = true;
-    } catch {
-      // Own DB not configured — use Taiga transaction_summary for gallons
-      lastReportDate = await getLastReportDateFallback(taiga);
-      const asOf = lastReportDate ? new Date(lastReportDate + "T12:00:00Z") : new Date();
-      [gallonTrend, storeGallons] = await Promise.all([
-        getGallonTrendFallback(taiga, asOf),
-        getStoreGallonsMtdFallback(taiga, asOf),
-      ]);
-    }
-    void ownDbAvailable;
-
-    [marginData, topBottomData] = await Promise.all([
-      getMarginStatus(taiga),
-      getTopBottomProducts(taiga),
+    const db = getTaigaSupabaseClient();
+    lastReportDate = await getLastReportDate(db);
+    const asOf = lastReportDate ? new Date(lastReportDate + "T12:00:00Z") : new Date();
+    [gallonTrend, storeGallons, marginData, topBottomData] = await Promise.all([
+      getGallonTrend(db, asOf),
+      getStoreGallonsMtd(db, asOf),
+      getMarginStatus(db),
+      getTopBottomProducts(db),
     ]);
     [voidsData, combosData] = await Promise.all([getVoids(), getCombos()]);
   } catch {
-    // Taiga DB not configured — render empty states
+    // DB not configured — render empty states
   }
 
   const today = new Date();
