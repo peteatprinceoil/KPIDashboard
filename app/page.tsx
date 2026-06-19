@@ -1,4 +1,4 @@
-import { getSupabaseServerClient } from "@/lib/supabase";
+import { getTaigaSupabaseClient } from "@/lib/taiga-supabase";
 import {
   getGallonTrend,
   getStoreGallonsMtd,
@@ -30,8 +30,12 @@ function fmtGallons(n: number | null): string {
 
 function fmtPct(n: number | null): string {
   if (n === null) return "";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toFixed(1)}%`;
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+function fmtMonthYear(dateRange: string): string {
+  const [y, m] = dateRange.split("-").map(Number);
+  return `${MONTHS[m - 1]} ${y}`;
 }
 
 function fmtIsoDate(iso: string): string {
@@ -47,18 +51,15 @@ function fmtToday(d: Date): string {
 
 function TrendCard({
   period,
-  label,
   data,
 }: {
   period: string;
-  label: string;
   data: PeriodComparison | null;
 }) {
   const hasNumber = data !== null && data.current !== null;
-
   return (
     <div className="t-card">
-      <div className="t-period">{period} &middot; {label}</div>
+      <div className="t-period">{period} &middot; Gallons</div>
       <div className="t-sep" aria-hidden="true" />
       {hasNumber ? (
         <>
@@ -84,10 +85,85 @@ function TrendCard({
   );
 }
 
+function MarginPanel({ data }: { data: MarginData }) {
+  if (!data.available) {
+    return (
+      <div className="s-panel">
+        <div className="s-title">Store Margin</div>
+        <div className="s-sub">≥40% green &middot; within 2% yellow &middot; &gt;2% off red</div>
+        <div className="s-dots" aria-hidden="true">
+          {[0,1,2].map((i) => <span key={i} className="s-dot" />)}
+        </div>
+        <div className="s-reason">{data.reason}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="s-panel">
+      <div className="s-title">Store Margin</div>
+      <div className="s-sub">
+        vs {data.targetPercent}% target &middot; {fmtMonthYear(data.period)}
+      </div>
+      <div className="rag-list" role="list">
+        {data.stores.map((s) => (
+          <div key={s.storeId} className="rag-row" role="listitem">
+            <span className={`rag-dot ${s.status}`} aria-label={s.status} />
+            <span className="rag-store">{s.storeName}</span>
+            <span className="rag-pct">{s.marginPercent}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProductsPanel({ data }: { data: TopBottomResult }) {
+  if (!data.available) {
+    return (
+      <div className="s-panel">
+        <div className="s-title">Top &amp; Bottom Items</div>
+        <div className="s-sub">Best 5 sellers &middot; Slowest 5 sellers</div>
+        <div className="s-dots" aria-hidden="true">
+          {[0,1,2,3,4].map((i) => <span key={i} className="s-dot" />)}
+        </div>
+        <div className="s-reason">{data.reason}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="s-panel">
+      <div className="s-title">Top &amp; Bottom Items</div>
+      <div className="s-sub">Units sold &middot; {fmtMonthYear(data.period)} &middot; all stores</div>
+      <div className="rank-cols">
+        <div>
+          <div className="rank-col-label">Top 5</div>
+          {data.top5.map((p) => (
+            <div key={p.productName} className="rank-row">
+              <span className="rank-name" title={p.productName}>{p.productName}</span>
+              <span className="rank-units">{p.unitsSold.toLocaleString("en-US")}</span>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div className="rank-col-label">Bottom 5</div>
+          {data.bottom5.map((p) => (
+            <div key={p.productName} className="rank-row">
+              <span className="rank-name" title={p.productName}>{p.productName}</span>
+              <span className="rank-units">{p.unitsSold.toLocaleString("en-US")}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StubPanel({
   title,
   sub,
-  dotCount,
+  dotCount = 5,
   reason,
 }: {
   title: string;
@@ -100,7 +176,7 @@ function StubPanel({
       <div className="s-title">{title}</div>
       <div className="s-sub">{sub}</div>
       <div className="s-dots" aria-hidden="true">
-        {Array.from({ length: dotCount ?? 5 }).map((_, i) => (
+        {Array.from({ length: dotCount }).map((_, i) => (
           <span key={i} className="s-dot" />
         ))}
       </div>
@@ -115,9 +191,7 @@ export default async function Page() {
   const emptyPeriod: PeriodComparison = { current: null, priorYear: null, changePercent: null };
   const emptyTrend: GallonTrend = {
     asOf: new Date().toISOString().slice(0, 10),
-    mtd: emptyPeriod,
-    qtd: emptyPeriod,
-    ytd: emptyPeriod,
+    mtd: emptyPeriod, qtd: emptyPeriod, ytd: emptyPeriod,
   };
 
   let gallonTrend: GallonTrend = emptyTrend;
@@ -129,19 +203,18 @@ export default async function Page() {
   let lastReportDate: string | null = null;
 
   try {
-    const supabase = getSupabaseServerClient();
-    [gallonTrend, storeGallons, marginData, topBottomData, voidsData, combosData, lastReportDate] =
+    const taiga = getTaigaSupabaseClient();
+    [gallonTrend, storeGallons, marginData, topBottomData, lastReportDate] =
       await Promise.all([
-        getGallonTrend(supabase),
-        getStoreGallonsMtd(supabase),
-        getMarginStatus(supabase),
-        getTopBottomProducts(supabase),
-        getVoids(supabase),
-        getCombos(supabase),
-        getLastReportDate(supabase),
+        getGallonTrend(taiga),
+        getStoreGallonsMtd(taiga),
+        getMarginStatus(taiga),
+        getTopBottomProducts(taiga),
+        getLastReportDate(taiga),
       ]);
+    [voidsData, combosData] = await Promise.all([getVoids(), getCombos()]);
   } catch {
-    // DB not yet configured — page renders with empty states throughout
+    // Taiga DB not configured — render empty states
   }
 
   const today = new Date();
@@ -162,9 +235,7 @@ export default async function Page() {
         <div className="hd-right">
           <span className="hd-date">{fmtToday(today)}</span>
           {lastReportDate && (
-            <span className="hd-report">
-              Last report: {fmtIsoDate(lastReportDate)}
-            </span>
+            <span className="hd-report">Last data: {fmtIsoDate(lastReportDate)}</span>
           )}
         </div>
       </header>
@@ -173,9 +244,9 @@ export default async function Page() {
       <section className="sec">
         <h2 className="sec-label">Gallon Trend</h2>
         <div className="trend-row">
-          <TrendCard period="MTD" label="Gallons" data={gallonTrend.mtd} />
-          <TrendCard period="QTD" label="Gallons" data={gallonTrend.qtd} />
-          <TrendCard period="YTD" label="Gallons" data={gallonTrend.ytd} />
+          <TrendCard period="MTD" data={gallonTrend.mtd} />
+          <TrendCard period="QTD" data={gallonTrend.qtd} />
+          <TrendCard period="YTD" data={gallonTrend.ytd} />
         </div>
       </section>
 
@@ -200,16 +271,12 @@ export default async function Page() {
         </section>
       )}
 
-      {/* ── Operations: stub panels ────────────────────────────────────── */}
+      {/* ── Operations ─────────────────────────────────────────────────── */}
       <section className="sec">
         <h2 className="sec-label">Operations</h2>
         <div className="stub-grid">
-          <StubPanel
-            title="Store Margin"
-            sub="≥40% green · within 2% yellow · >2% off red"
-            dotCount={3}
-            reason={marginData.available ? "" : marginData.reason}
-          />
+          <MarginPanel data={marginData} />
+          <ProductsPanel data={topBottomData} />
           <StubPanel
             title="Voids &amp; No-Sales"
             sub="Per store, daily count"
@@ -217,14 +284,8 @@ export default async function Page() {
             reason={voidsData.available ? "" : voidsData.reason}
           />
           <StubPanel
-            title="Top &amp; Bottom Items"
-            sub="Best 5 sellers · Slowest 5 sellers"
-            dotCount={5}
-            reason={topBottomData.available ? "" : topBottomData.reason}
-          />
-          <StubPanel
             title="Meal Combos"
-            sub="Breakfast pairings · Lunch pairings · Ranked by store"
+            sub="Breakfast pairings &middot; Lunch pairings"
             dotCount={5}
             reason={combosData.available ? "" : combosData.reason}
           />
@@ -242,9 +303,8 @@ export default async function Page() {
         </div>
       </section>
 
-      {/* ── Footer ─────────────────────────────────────────────────────── */}
       <footer className="foot">
-        Data sourced from Taiga daily email reports &middot; Updated automatically each morning
+        Data sourced from Taiga &middot; Updated nightly
       </footer>
 
     </main>

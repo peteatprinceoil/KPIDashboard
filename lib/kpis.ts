@@ -1,46 +1,37 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// ── Gallon Trend ────────────────────────────────────────────────────────────
+// ── Gallon Trend ──────────────────────────────────────────────────────────────
+// Source: transaction_daily.gallons_pumped (Taiga DB)
 
 export interface PeriodComparison {
-  current: number | null; // null = no data for this period yet
-  priorYear: number | null; // null = no prior-year data yet
+  current: number | null;
+  priorYear: number | null;
   changePercent: number | null;
 }
 
 export interface GallonTrend {
-  asOf: string; // YYYY-MM-DD
+  asOf: string;
   mtd: PeriodComparison;
   qtd: PeriodComparison;
   ytd: PeriodComparison;
 }
 
-function periodBounds(asOf: Date): {
-  mtdStart: string;
-  qtdStart: string;
-  ytdStart: string;
-  pyMtdStart: string;
-  pyQtdStart: string;
-  pyYtdStart: string;
-  pyAsOf: string;
-} {
+function periodBounds(asOf: Date) {
   const y = asOf.getUTCFullYear();
-  const m = asOf.getUTCMonth() + 1; // 1-based
+  const m = asOf.getUTCMonth() + 1;
   const quarter = Math.ceil(m / 3);
   const qtdMonth = (quarter - 1) * 3 + 1;
-
   const pad = (n: number) => String(n).padStart(2, "0");
   const iso = (yr: number, mo: number, d: number) =>
     `${yr}-${pad(mo)}-${pad(d)}`;
-
   return {
-    mtdStart: iso(y, m, 1),
-    qtdStart: iso(y, qtdMonth, 1),
-    ytdStart: iso(y, 1, 1),
+    mtdStart:   iso(y, m, 1),
+    qtdStart:   iso(y, qtdMonth, 1),
+    ytdStart:   iso(y, 1, 1),
     pyMtdStart: iso(y - 1, m, 1),
     pyQtdStart: iso(y - 1, qtdMonth, 1),
     pyYtdStart: iso(y - 1, 1, 1),
-    pyAsOf: iso(y - 1, m, asOf.getUTCDate()),
+    pyAsOf:     iso(y - 1, m, asOf.getUTCDate()),
   };
 }
 
@@ -50,20 +41,17 @@ async function sumGallons(
   to: string
 ): Promise<number | null> {
   const { data, error } = await supabase
-    .from("fuel_sales_daily")
-    .select("gallons")
-    .eq("fuel_type", "TOTAL")
-    .gte("report_date", from)
-    .lte("report_date", to);
+    .from("transaction_daily")
+    .select("gallons_pumped")
+    .gte("business_date", from)
+    .lte("business_date", to);
 
-  if (error) throw new Error(`sumGallons(${from}→${to}): ${error.message}`);
-  if (!data || data.length === 0) return null;
-
-  const total = (data as { gallons: number | null }[]).reduce(
-    (acc, row) => acc + (row.gallons ?? 0),
+  if (error || !data || data.length === 0) return null;
+  const total = (data as { gallons_pumped: number | null }[]).reduce(
+    (sum, r) => sum + (r.gallons_pumped ?? 0),
     0
   );
-  return total;
+  return total > 0 ? total : null;
 }
 
 function comparison(
@@ -101,7 +89,7 @@ export async function getGallonTrend(
   };
 }
 
-// ── Store-level gallon totals (for per-store breakdowns) ─────────────────────
+// ── Store Gallons MTD ─────────────────────────────────────────────────────────
 
 export interface StoreGallons {
   storeId: string;
@@ -118,37 +106,42 @@ export async function getStoreGallonsMtd(
   const mtdStart = `${y}-${m}-01`;
   const today = asOf.toISOString().slice(0, 10);
 
-  const { data, error } = await supabase
-    .from("fuel_sales_daily")
-    .select("store_id, store_name, gallons")
-    .eq("fuel_type", "TOTAL")
-    .gte("report_date", mtdStart)
-    .lte("report_date", today);
+  const [{ data: dailyData }, { data: storesData }] = await Promise.all([
+    supabase
+      .from("transaction_daily")
+      .select("store_id, gallons_pumped")
+      .gte("business_date", mtdStart)
+      .lte("business_date", today),
+    supabase.from("stores").select("store_id, store_name"),
+  ]);
 
-  if (error) throw new Error(`getStoreGallonsMtd: ${error.message}`);
+  const nameMap = new Map(
+    (storesData ?? []).map((s: { store_id: string; store_name: string }) => [
+      s.store_id,
+      s.store_name,
+    ])
+  );
 
-  const byStore = new Map<string, StoreGallons>();
-  for (const row of (data ?? []) as {
+  const byStore = new Map<string, number>();
+  for (const row of (dailyData ?? []) as {
     store_id: string;
-    store_name: string;
-    gallons: number | null;
+    gallons_pumped: number | null;
   }[]) {
-    const existing = byStore.get(row.store_id);
-    if (existing) {
-      existing.gallons += row.gallons ?? 0;
-    } else {
-      byStore.set(row.store_id, {
-        storeId: row.store_id,
-        storeName: row.store_name,
-        gallons: row.gallons ?? 0,
-      });
-    }
+    byStore.set(row.store_id, (byStore.get(row.store_id) ?? 0) + (row.gallons_pumped ?? 0));
   }
 
-  return [...byStore.values()].sort((a, b) => b.gallons - a.gallons);
+  return [...byStore.entries()]
+    .map(([storeId, gallons]) => ({
+      storeId,
+      storeName: nameMap.get(storeId) ?? slugToTitle(storeId),
+      gallons,
+    }))
+    .sort((a, b) => b.gallons - a.gallons);
 }
 
-// ── Margin RAG ───────────────────────────────────────────────────────────────
+// ── Margin RAG ────────────────────────────────────────────────────────────────
+// Source: transaction_summary.total_margin (Taiga DB)
+// total_margin is a decimal: 0.40 = 40%
 
 export type RagStatus = "green" | "yellow" | "red";
 
@@ -159,141 +152,178 @@ export interface StoreMargin {
   status: RagStatus;
 }
 
-export interface MarginResult {
-  available: false;
-  reason: string;
-}
-
 export type MarginData =
-  | { available: true; targetPercent: number; stores: StoreMargin[] }
-  | MarginResult;
+  | { available: true; targetPercent: number; period: string; stores: StoreMargin[] }
+  | { available: false; reason: string };
 
-const MARGIN_TARGET = 40; // %
-const MARGIN_YELLOW_THRESHOLD = 2; // within 2% = yellow
+const MARGIN_TARGET = 0.40;
+const MARGIN_YELLOW_FLOOR = 0.38; // within 2 percentage points
+
+function ragStatus(margin: number): RagStatus {
+  if (margin >= MARGIN_TARGET) return "green";
+  if (margin >= MARGIN_YELLOW_FLOOR) return "yellow";
+  return "red";
+}
 
 export async function getMarginStatus(
   supabase: SupabaseClient
 ): Promise<MarginData> {
-  const { data, error } = await supabase
-    .from("margin_daily")
-    .select("store_id")
-    .limit(1);
+  // Find the most recent month
+  const { data: latestRow, error: latestErr } = await supabase
+    .from("transaction_summary")
+    .select("date_range")
+    .order("date_range", { ascending: false })
+    .limit(1)
+    .single();
 
-  if (error || !data || data.length === 0) {
-    return {
-      available: false,
-      reason:
-        "No margin data yet. Ask Ben to schedule a Taiga margin report to the AgentMail inbox.",
-    };
+  if (latestErr || !latestRow) {
+    return { available: false, reason: "No margin data in Taiga yet." };
   }
 
-  // Real implementation: query margin_daily, aggregate, apply RAG thresholds.
-  // Placeholder until the margin parser lands.
+  const [{ data: margins }, { data: storesData }] = await Promise.all([
+    supabase
+      .from("transaction_summary")
+      .select("store_id, store_number, total_margin")
+      .eq("date_range", latestRow.date_range)
+      .order("total_margin", { ascending: false }),
+    supabase.from("stores").select("store_id, store_name"),
+  ]);
+
+  if (!margins || margins.length === 0) {
+    return { available: false, reason: "No margin data for the latest period." };
+  }
+
+  const nameMap = new Map(
+    (storesData ?? []).map((s: { store_id: string; store_name: string }) => [
+      s.store_id,
+      s.store_name,
+    ])
+  );
+
+  const stores: StoreMargin[] = (
+    margins as { store_id: string; total_margin: number | null }[]
+  )
+    .filter((r) => r.total_margin !== null)
+    .map((r) => ({
+      storeId: r.store_id,
+      storeName: nameMap.get(r.store_id) ?? slugToTitle(r.store_id),
+      marginPercent: Math.round((r.total_margin! * 100) * 10) / 10,
+      status: ragStatus(r.total_margin!),
+    }));
+
   return {
-    available: false,
-    reason: "Margin parser not yet implemented.",
+    available: true,
+    targetPercent: 40,
+    period: latestRow.date_range,
+    stores,
   };
 }
 
-// ── Top / Bottom Products ────────────────────────────────────────────────────
+// ── Top / Bottom Products ─────────────────────────────────────────────────────
+// Source: merchandise_product (Taiga DB), aggregated across all stores
 
 export interface ProductRanking {
   rank: number;
-  sku: string;
   productName: string;
   unitsSold: number;
-  storeId: string;
-  storeName: string;
+  totalSales: number;
 }
 
 export type TopBottomResult =
-  | { available: true; top5: ProductRanking[]; bottom5: ProductRanking[] }
+  | { available: true; period: string; top5: ProductRanking[]; bottom5: ProductRanking[] }
   | { available: false; reason: string };
 
 export async function getTopBottomProducts(
   supabase: SupabaseClient
 ): Promise<TopBottomResult> {
-  const { data, error } = await supabase
-    .from("top_products")
-    .select("store_id")
-    .limit(1);
+  const { data: latestRow, error } = await supabase
+    .from("merchandise_product")
+    .select("date_range")
+    .order("date_range", { ascending: false })
+    .limit(1)
+    .single();
 
-  if (error || !data || data.length === 0) {
-    return {
-      available: false,
-      reason:
-        "No product ranking data yet. Ask Ben to schedule a Taiga top-sellers report to the AgentMail inbox.",
-    };
+  if (error || !latestRow) {
+    return { available: false, reason: "No product data in Taiga yet." };
   }
 
-  return { available: false, reason: "Top-products parser not yet implemented." };
+  const { data: rows } = await supabase
+    .from("merchandise_product")
+    .select("product_name, units_sold, total_sales_amount")
+    .eq("date_range", latestRow.date_range);
+
+  if (!rows || rows.length === 0) {
+    return { available: false, reason: "No product data for the latest period." };
+  }
+
+  // Aggregate by product_name across stores
+  const agg = new Map<string, { units: number; sales: number }>();
+  for (const r of rows as {
+    product_name: string;
+    units_sold: number | null;
+    total_sales_amount: number | null;
+  }[]) {
+    const existing = agg.get(r.product_name) ?? { units: 0, sales: 0 };
+    agg.set(r.product_name, {
+      units: existing.units + (r.units_sold ?? 0),
+      sales: existing.sales + (r.total_sales_amount ?? 0),
+    });
+  }
+
+  const sorted = [...agg.entries()]
+    .map(([name, { units, sales }]) => ({ name, units, sales }))
+    .filter((p) => p.units > 0)
+    .sort((a, b) => b.units - a.units);
+
+  const toRanking = (
+    items: typeof sorted,
+    offset = 0
+  ): ProductRanking[] =>
+    items.map((p, i) => ({
+      rank: offset + i + 1,
+      productName: p.name,
+      unitsSold: Math.round(p.units),
+      totalSales: Math.round(p.sales * 100) / 100,
+    }));
+
+  // Bottom 5: lowest-selling among items with at least 10 units (avoids single-sale noise)
+  const meaningful = sorted.filter((p) => p.units >= 10);
+  const bottom5Raw = meaningful.slice(-5).reverse();
+
+  return {
+    available: true,
+    period: latestRow.date_range,
+    top5: toRanking(sorted.slice(0, 5)),
+    bottom5: toRanking(bottom5Raw),
+  };
 }
 
-// ── Voids / No-Sales ─────────────────────────────────────────────────────────
-
-export interface VoidCount {
-  storeId: string;
-  storeName: string;
-  reportDate: string;
-  voids: number;
-  noSales: number;
-}
+// ── Voids ─────────────────────────────────────────────────────────────────────
+// Not available in current Taiga schema
 
 export type VoidsResult =
-  | { available: true; rows: VoidCount[] }
+  | { available: true; rows: unknown[] }
   | { available: false; reason: string };
 
-export async function getVoids(
-  supabase: SupabaseClient
-): Promise<VoidsResult> {
-  const { data, error } = await supabase
-    .from("voids")
-    .select("store_id")
-    .limit(1);
-
-  if (error || !data || data.length === 0) {
-    return {
-      available: false,
-      reason:
-        "No voids data yet. Ask Ben to schedule a Taiga voids/no-sales report to the AgentMail inbox.",
-    };
-  }
-
-  return { available: false, reason: "Voids parser not yet implemented." };
+export async function getVoids(): Promise<VoidsResult> {
+  return {
+    available: false,
+    reason: "Void/no-sale data is not yet in the Taiga dataset.",
+  };
 }
 
-// ── Meal Combos ──────────────────────────────────────────────────────────────
-
-export interface ComboInsight {
-  daypart: "breakfast" | "lunch";
-  anchorItem: string;
-  pairedItem: string;
-  count: number;
-  storeId: string;
-  storeName: string;
-}
+// ── Combos ────────────────────────────────────────────────────────────────────
+// Not available in current Taiga schema
 
 export type CombosResult =
-  | { available: true; combos: ComboInsight[] }
+  | { available: true; combos: unknown[] }
   | { available: false; reason: string };
 
-export async function getCombos(
-  supabase: SupabaseClient
-): Promise<CombosResult> {
-  const { data, error } = await supabase
-    .from("combo_sales")
-    .select("store_id")
-    .limit(1);
-
-  if (error || !data || data.length === 0) {
-    return {
-      available: false,
-      reason:
-        "No combo data yet. Ask Ben to schedule a Taiga item-pairing report to the AgentMail inbox.",
-    };
-  }
-
-  return { available: false, reason: "Combo parser not yet implemented." };
+export async function getCombos(): Promise<CombosResult> {
+  return {
+    available: false,
+    reason: "Basket-level pairing data is not yet in the Taiga dataset.",
+  };
 }
 
 // ── Last Report Date ──────────────────────────────────────────────────────────
@@ -302,12 +332,21 @@ export async function getLastReportDate(
   supabase: SupabaseClient
 ): Promise<string | null> {
   const { data, error } = await supabase
-    .from("fuel_sales_daily")
-    .select("report_date")
-    .order("report_date", { ascending: false })
+    .from("transaction_daily")
+    .select("business_date")
+    .order("business_date", { ascending: false })
     .limit(1)
     .single();
 
   if (error || !data) return null;
-  return (data as { report_date: string }).report_date;
+  return (data as { business_date: string }).business_date;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function slugToTitle(slug: string): string {
+  return slug
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
