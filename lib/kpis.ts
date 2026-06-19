@@ -2,12 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // All data comes from the Taiga Supabase (one database).
 //
-// Current-year gallons   → transaction_daily  (daily per-store rows, reliable from April 2026)
-// Prior-year gallons     → transaction_summary (monthly per-store rows, reliable from June 2024)
-//
-// LY MTD comparison: the partial current month in the prior year is unavailable at
-// daily granularity, so we scale the full prior-year month by (day / days_in_month).
-// Complete prior-year months (QTD/YTD) are summed exactly.
+// Current-year gallons → transaction_daily (reliable from Jan 2026 after backfill)
+// Prior-year gallons   → transaction_daily (backfilled Jan 2025 – Dec 2025, exact daily precision)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,22 +35,6 @@ function slugToTitle(slug: string): string {
     .join(" ");
 }
 
-function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getDate();
-}
-
-function monthKeysBetween(fromDate: string, toDate: string): string[] {
-  const keys: string[] = [];
-  const [fy, fm] = fromDate.slice(0, 7).split("-").map(Number);
-  const [ty, tm] = toDate.slice(0, 7).split("-").map(Number);
-  let y = fy, m = fm;
-  while (y < ty || (y === ty && m <= tm)) {
-    keys.push(`${y}-${String(m).padStart(2, "0")}`);
-    m++;
-    if (m > 12) { m = 1; y++; }
-  }
-  return keys;
-}
 
 function comparison(current: number | null, prior: number | null): PeriodComparison {
   const changePercent =
@@ -64,50 +44,35 @@ function comparison(current: number | null, prior: number | null): PeriodCompari
   return { current, priorYear: prior, changePercent };
 }
 
-// Sum gallons_pumped from transaction_summary for the given month keys.
-// The partial month (current month in LY) is scaled by dayFraction.
-async function sumSummaryGallons(
-  supabase: SupabaseClient,
-  monthKeys: string[],
-  partialMonthKey: string | null,   // the month to scale
-  dayFraction: number               // day / daysInMonth
-): Promise<number | null> {
-  if (monthKeys.length === 0) return null;
-
-  const { data, error } = await supabase
-    .from("transaction_summary")
-    .select("date_range, gallons_pumped")
-    .in("date_range", monthKeys);
-
-  if (error || !data || data.length === 0) return null;
-
-  const rows = data as { date_range: string; gallons_pumped: number | null }[];
-  const total = rows.reduce((sum, r) => {
-    const g = r.gallons_pumped ?? 0;
-    return sum + (r.date_range === partialMonthKey ? g * dayFraction : g);
-  }, 0);
-
-  return total > 0 ? total : null;
-}
-
-// Sum gallons_pumped from transaction_daily for a date range.
+// Sum gallons_pumped from transaction_daily for a date range, paginating past the 1000-row limit.
 async function sumDailyGallons(
   supabase: SupabaseClient,
   from: string,
   to: string
 ): Promise<number | null> {
-  const { data, error } = await supabase
-    .from("transaction_daily")
-    .select("gallons_pumped")
-    .gte("business_date", from)
-    .lte("business_date", to);
+  const PAGE = 1000;
+  let total = 0;
+  let found = false;
+  let page = 0;
 
-  if (error || !data || data.length === 0) return null;
-  const total = (data as { gallons_pumped: number | null }[]).reduce(
-    (sum, r) => sum + (r.gallons_pumped ?? 0),
-    0
-  );
-  return total > 0 ? total : null;
+  while (true) {
+    const { data, error } = await supabase
+      .from("transaction_daily")
+      .select("gallons_pumped")
+      .gte("business_date", from)
+      .lte("business_date", to)
+      .range(page * PAGE, (page + 1) * PAGE - 1);
+
+    if (error || !data || data.length === 0) break;
+    found = true;
+    for (const r of data as { gallons_pumped: number | null }[]) {
+      total += r.gallons_pumped ?? 0;
+    }
+    if (data.length < PAGE) break;
+    page++;
+  }
+
+  return found && total > 0 ? total : null;
 }
 
 // ── Gallon Trend ──────────────────────────────────────────────────────────────
@@ -136,20 +101,17 @@ export async function getGallonTrend(
     sumDailyGallons(supabase, ytdStart, today),
   ]);
 
-  // Prior year: transaction_summary (monthly). The current month in LY is partial —
-  // scale it by (day / daysInMonth) since we only have the full-month total.
+  // Prior year: transaction_daily (backfilled Jan 2025 onward — exact daily precision)
   const lyYear = y - 1;
-  const lyPartialKey = `${lyYear}-${pad(m)}`;
-  const dayFraction = d / daysInMonth(lyYear, m);
-
-  const lyMtdKeys  = [`${lyYear}-${pad(m)}`];
-  const lyQtdKeys  = monthKeysBetween(`${lyYear}-${pad(qtdStartMonth)}-01`, `${lyYear}-${pad(m)}-01`);
-  const lyYtdKeys  = monthKeysBetween(`${lyYear}-01-01`, `${lyYear}-${pad(m)}-01`);
+  const lyToday    = `${lyYear}-${pad(m)}-${pad(d)}`;
+  const lyMtdStart = `${lyYear}-${pad(m)}-01`;
+  const lyQtdStart = `${lyYear}-${pad(qtdStartMonth)}-01`;
+  const lyYtdStart = `${lyYear}-01-01`;
 
   const [mtdPy, qtdPy, ytdPy] = await Promise.all([
-    sumSummaryGallons(supabase, lyMtdKeys, lyPartialKey, dayFraction),
-    sumSummaryGallons(supabase, lyQtdKeys, lyPartialKey, dayFraction),
-    sumSummaryGallons(supabase, lyYtdKeys, lyPartialKey, dayFraction),
+    sumDailyGallons(supabase, lyMtdStart, lyToday),
+    sumDailyGallons(supabase, lyQtdStart, lyToday),
+    sumDailyGallons(supabase, lyYtdStart, lyToday),
   ]);
 
   return {
