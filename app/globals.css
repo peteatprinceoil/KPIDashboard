@@ -1,0 +1,350 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --ground:  #1A1916;
+  --surface: #21201C;
+  --text:    #EDE8DF;
+  --muted:   #787060;
+  --dim:     #3C3A34;
+  --accent:  #C8841E;
+  --up:      #4A956A;
+  --dn:      #BF4F3A;
+  --border:  rgba(237,232,223,0.06);
+  --mono:    'Courier New', Menlo, Consolas, monospace;
+  --ui:      -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+html {
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+  font-size: 16px;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* ── Page container ─────────────────────────────────────────────────── */
+
+.page {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 2.5rem 2rem 5rem;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+.hd {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 1.75rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 3rem;
+}
+
+.hd-left {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+
+.brand {
+  font-family: var(--ui);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.brand-sep {
+  color: var(--dim);
+  margin: 0 0.6em;
+  font-size: 0.7rem;
+}
+
+.brand-sub {
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hd-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.hd-date {
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+}
+
+.hd-report {
+  font-size: 0.63rem;
+  color: var(--dim);
+}
+
+/* ── Section ─────────────────────────────────────────────────────────── */
+
+.sec {
+  margin-bottom: 3.5rem;
+}
+
+.sec-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+
+.sec-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Gallon trend cards ──────────────────────────────────────────────── */
+
+.trend-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+}
+
+.t-card {
+  background: var(--surface);
+  padding: 1.75rem 1.5rem 2rem;
+}
+
+.t-period {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1.25rem;
+}
+
+.t-sep {
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent) 30%, transparent 100%);
+  margin-bottom: 1.25rem;
+}
+
+.t-number {
+  font-family: var(--mono);
+  font-size: clamp(2.25rem, 3.5vw, 2.75rem);
+  line-height: 1;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  margin-bottom: 1rem;
+}
+
+.t-empty {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  color: var(--dim);
+  margin-bottom: 1rem;
+}
+
+.t-delta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.t-pct {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+.t-pct.up { color: var(--up); }
+.t-pct.dn { color: var(--dn); }
+
+.t-py {
+  font-size: 0.63rem;
+  color: var(--muted);
+}
+
+.t-no-py {
+  font-size: 0.63rem;
+  color: var(--dim);
+  font-style: italic;
+}
+
+/* ── Store bar chart ─────────────────────────────────────────────────── */
+
+.bars {
+  display: flex;
+  flex-direction: column;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 11rem 1fr 5.5rem;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bar-row:last-child {
+  border-bottom: none;
+}
+
+.bar-name {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-track {
+  height: 2px;
+  background: var(--dim);
+  position: relative;
+}
+
+.bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--accent);
+  max-width: 100%;
+}
+
+.bar-val {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text);
+  text-align: right;
+}
+
+/* ── Stub panels (2×2 grid) ──────────────────────────────────────────── */
+
+.stub-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+}
+
+.s-panel {
+  background: var(--surface);
+  padding: 1.5rem;
+  min-height: 10rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.s-title {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.s-sub {
+  font-size: 0.63rem;
+  color: var(--dim);
+  letter-spacing: 0.03em;
+  margin-bottom: auto;
+}
+
+.s-dots {
+  display: flex;
+  gap: 5px;
+  padding-top: 1.75rem;
+  margin-bottom: 1rem;
+}
+
+.s-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dim);
+  display: inline-block;
+}
+
+.s-reason {
+  font-size: 0.63rem;
+  color: var(--dim);
+  font-style: italic;
+  line-height: 1.55;
+}
+
+/* ── Inventory wide panel ────────────────────────────────────────────── */
+
+.stub-wide {
+  background: var(--surface);
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+.stub-wide-label {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stub-wide-msg {
+  font-size: 0.7rem;
+  color: var(--dim);
+  font-style: italic;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+
+.foot {
+  border-top: 1px solid var(--border);
+  padding-top: 1.5rem;
+  margin-top: 1rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+
+@media (max-width: 680px) {
+  .page        { padding: 1.5rem 1rem 4rem; }
+  .trend-row   { grid-template-columns: 1fr; }
+  .stub-grid   { grid-template-columns: 1fr; }
+  .bar-row     { grid-template-columns: 8rem 1fr 4.5rem; gap: 0.75rem; }
+  .hd          { flex-direction: column; align-items: flex-start; gap: 1rem; }
+  .hd-right    { align-items: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

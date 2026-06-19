@@ -1,0 +1,452 @@
+Store Id
+Store Name
+Total Gallons
+Comparison Gallons
+Gallons Change
+Total Fuel $
+Comparison Total Fuel $
+Fuel $ Change
+Regular
+Plus
+Premium
+Diesel
+Unknown Fuel Type
+Kerosene
+E15
+E85
+Bio Diesel
+Natural Gas
+Hydrogen
+Electricity
+E20
+E30
+E40
+REC-90
+E10
+Diesel Exhaust Fluid
+Dyed Diesel
+100% Non-Ethanol
+E-10 Plus
+E-10 Premium
+Lead Racing Fuel 110 Octane
+E98
+REC-89
+E0
+E0 Plus
+E0 Premium
+Diesel #2
+Premium Diesel
+87 Oxy
+91 Non Oxy
+91 Oxy
+Diesel #1 Clear No Bio
+Diesel #2 Clear Bio
+Diesel #2 Dyed Bio
+Diesel Blend
+2004
+Newton Crossing
+6,529.666
+7,231.355
+9.7% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$27,710.73
+$31,822.00
+12.9% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+2,482.216
+340.168
+211.542
+3,422.058
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+73.682
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2005
+Union Junction
+5,548.830
+6,490.627
+14.5% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$22,349.78
+$27,186.46
+17.8% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+3,580.719
+145.395
+126.433
+1,614.701
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+81.582
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2003
+Scooba Junction
+5,054.745
+5,989.345
+15.6% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$21,571.65
+$26,649.52
+19.1% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+1,988.751
+175.426
+203.844
+2,583.757
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+23.112
+-
+79.855
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2014
+Gluckstadt Junction
+5,034.201
+6,786.487
+25.8% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$20,771.11
+$29,490.29
+29.6% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+2,852.959
+215.313
+281.547
+1,605.305
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+25.488
+-
+53.589
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2001
+Main Street Junction
+5,074.768
+6,101.884
+16.8% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$19,951.90
+$25,335.83
+21.3% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+3,869.490
+251.369
+186.462
+606.199
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+161.248
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2006
+Main Street Junction #2
+4,617.185
+4,335.664
+6.5% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-up-solid-green.png]
+$18,836.07
+$18,426.82
+2.2% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-up-solid-green.png]
+2,853.596
+209.189
+160.234
+1,345.938
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+48.228
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2008
+Carthage Junction
+4,726.048
+3,018.603
+56.6% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-up-solid-green.png]
+$16,900.10
+$10,921.57
+54.7% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-up-solid-green.png]
+3,934.143
+176.122
+192.743
+415.263
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+7.777
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2000
+Newton Junction
+3,996.233
+3,835.300
+4.2% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-up-solid-green.png]
+$14,840.48
+$14,875.24
+0.2% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+3,459.839
+171.214
+126.643
+238.537
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+2012
+Macon Junction
+1,607.069
+1,781.600
+9.8% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+$6,261.46
+$7,049.25
+11.2% [https://app.taigadata.com/assets/images/font-awesome-png/arrow-alt-circle-down-solid.png]
+1,365.831
+156.765
+84.473
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+9 Total Results
+42,188.745
